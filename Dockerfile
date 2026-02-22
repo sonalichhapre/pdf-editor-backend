@@ -6,6 +6,8 @@ RUN apt-get update && apt-get install -y \
     fonts-dejavu \
     && rm -rf /var/lib/apt/lists/*
 
+ENV LIBREOFFICE_PATH=/usr/bin/libreoffice
+
 WORKDIR /app
 
 COPY requirements.txt .
