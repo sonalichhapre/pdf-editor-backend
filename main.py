@@ -30,7 +30,7 @@ app = FastAPI(title="PDF & Word Converter")
 # ---------- CORS ----------
 _cors_origins = os.getenv(
     "CORS_ALLOW_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173",
+    "http://localhost:5173,http://127.0.0.1:5173,https://getdocease.vercel.app,https://pdf-editor-frontend-cyan.vercel.app",
 )
 allow_origins = [o.strip() for o in _cors_origins.split(",") if o.strip()]
 
