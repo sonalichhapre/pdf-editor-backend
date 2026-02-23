@@ -424,7 +424,87 @@ async def word_to_pdf(
         download_name=f"{input_stem}.pdf",
         tmpdir=tmpdir,
     )
+# ---------- REDUCE PDF (same format) ----------
+@app.post("/reduce-pdf")
+async def reduce_pdf(
+    file: UploadFile = File(...),
+    target_size_kb: Optional[str] = Form(None),
+):
+    """Reduce PDF file size. Accepts PDF, returns compressed PDF."""
+    filename = _safe_basename(file.filename)
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Please upload a PDF file.")
+    input_stem = Path(filename).stem or "document"
 
+    target_bytes = None
+    if target_size_kb:
+        try:
+            target_bytes = int(float(target_size_kb.strip()) * 1024)
+        except (ValueError, TypeError):
+            pass
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="convert_"))
+    input_path = tmpdir / filename
+    with open(input_path, "wb") as f:
+        f.write(await file.read())
+
+    out_path = input_path
+    if target_bytes and target_bytes > 0 and input_path.stat().st_size > target_bytes:
+        out_path = _reduce_pdf_to_size(input_path, target_bytes)
+
+    return _response_with_tmpdir_cleanup(
+        out_path,
+        media_type="application/pdf",
+        download_name=f"{input_stem}_reduced.pdf",
+        tmpdir=tmpdir,
+    )
+
+
+# ---------- REDUCE WORD (same format) ----------
+@app.post("/reduce-word")
+async def reduce_word(
+    file: UploadFile = File(...),
+    target_size_kb: Optional[str] = Form(None),
+):
+    """Reduce Word file size. Accepts .doc/.docx, returns compressed DOCX."""
+    filename = _safe_basename(file.filename)
+    ext = Path(filename).suffix.lower()
+    if ext not in (".doc", ".docx"):
+        raise HTTPException(status_code=400, detail="Please upload a Word file (.doc, .docx).")
+    input_stem = Path(filename).stem or "document"
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="convert_"))
+    input_path = tmpdir / filename
+    html_path = tmpdir / f"{input_stem}.html"
+    odt_path = tmpdir / f"{input_stem}.odt"
+    docx_path = tmpdir / f"{input_stem}.docx"
+
+    with open(input_path, "wb") as f:
+        f.write(await file.read())
+
+    # Word → HTML → ODT → DOCX
+    _run_convert(input_path=input_path, output_path=html_path, timeout_s=120)
+    html_path = _find_output(tmpdir, html_path, ".html")
+    _run_convert(input_path=html_path, output_path=odt_path, timeout_s=90)
+    odt_path = _find_output(tmpdir, odt_path, ".odt")
+    _run_convert(input_path=odt_path, output_path=docx_path, timeout_s=60)
+    docx_path = _find_output(tmpdir, docx_path, ".docx")
+
+    target_bytes = None
+    if target_size_kb:
+        try:
+            target_bytes = int(float(target_size_kb.strip()) * 1024)
+        except (ValueError, TypeError):
+            pass
+    if target_bytes and target_bytes > 0 and docx_path.stat().st_size > target_bytes:
+        docx_path = _reduce_docx_to_size(docx_path, target_bytes)
+
+    return _response_with_tmpdir_cleanup(
+        docx_path,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        download_name=f"{input_stem}_reduced.docx",
+        tmpdir=tmpdir,
+    )
 
 # ---------- MERGE PDF ----------
 @app.post("/merge-pdf")
