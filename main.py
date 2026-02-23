@@ -101,7 +101,7 @@ def _run_convert(
     env = os.environ.copy()
     env["SAL_USE_VCLPLUGIN"] = "gen"
     env["HOME"] = "/tmp"
-    env["DISPLAY"] = ""
+    env["DISPLAY"] = ":99"
     env["DBUS_SESSION_BUS_ADDRESS"] = "/dev/null"
 
     try:
