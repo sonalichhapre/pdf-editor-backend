@@ -124,9 +124,13 @@ def _run_convert(
             detail=f"Conversion timed out after {timeout_s}s.",
         ) from e
 
+    stderr = (process.stderr or b"").decode(errors="replace").strip()
+    stdout = (process.stdout or b"").decode(errors="replace").strip()
+    print(f"CMD: {cmd}", flush=True)
+    print(f"RETURNCODE: {process.returncode}", flush=True)
+    print(f"STDOUT: {stdout}", flush=True)
+    print(f"STDERR: {stderr}", flush=True)
     if process.returncode != 0:
-        stderr = (process.stderr or b"").decode(errors="replace").strip()
-        stdout = (process.stdout or b"").decode(errors="replace").strip()
         detail = stderr or stdout or "Conversion failed"
         raise HTTPException(status_code=500, detail=detail)
 
