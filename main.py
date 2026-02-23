@@ -100,6 +100,7 @@ def _run_convert(
 
     env = os.environ.copy()
     env["SAL_USE_VCLPLUGIN"] = "gen"  # headless renderer, avoids display deps
+    env["HOME"] = "/tmp"
 
     try:
         process = subprocess.run(
