@@ -137,74 +137,106 @@ def _run_convert(
         raise HTTPException(status_code=500, detail=detail)
 
 
+
 def _reduce_pdf_to_size(pdf_path: Path, target_bytes: int) -> Path:
     """Compress PDF using Ghostscript until under target size. Returns path to compressed file."""
     gs = os.getenv("GHOSTSCRIPT_PATH", "gs")
-    best = pdf_path
-    # PDFSETTINGS: screen(72dpi) < ebook(150dpi) < printer(300dpi)
-    for setting in ("/screen", "/ebook", "/printer"):
-        out_path = pdf_path.parent / f"{pdf_path.stem}_c{setting.replace('/', '')}.pdf"
+    current = pdf_path
+    stem = pdf_path.stem
+
+    def run_gs(input_p: Path, output_p: Path, extra_args: list) -> bool:
         try:
             subprocess.run(
                 [
                     gs,
                     "-sDEVICE=pdfwrite",
                     "-dCompatibilityLevel=1.4",
-                    f"-dPDFSETTINGS={setting}",
                     "-dNOPAUSE",
                     "-dQUIET",
                     "-dBATCH",
-                    f"-sOutputFile={out_path}",
-                    str(pdf_path),
+                    *extra_args,
+                    f"-sOutputFile={output_p}",
+                    str(input_p),
                 ],
                 capture_output=True,
-                timeout=60,
+                timeout=90,
                 check=True,
             )
+            return output_p.exists()
         except (FileNotFoundError, subprocess.CalledProcessError):
-            continue
-        if out_path.exists() and out_path.stat().st_size < best.stat().st_size:
-            best = out_path
-        if best.stat().st_size <= target_bytes:
-            return best
-    return best
+            return False
+
+    # 1. Try PDFSETTINGS presets (screen = smallest)
+    for setting in ("/screen", "/ebook", "/printer"):
+        out_path = pdf_path.parent / f"{stem}_c{setting.replace('/', '')}.pdf"
+        if run_gs(current, out_path, [f"-dPDFSETTINGS={setting}"]) and out_path.stat().st_size < current.stat().st_size:
+            current = out_path
+        if current.stat().st_size <= target_bytes:
+            return current
+
+    # 2. Iteratively try lower custom resolutions until target met
+    for dpi in (72, 50, 36, 24):
+        out_path = pdf_path.parent / f"{stem}_dpi{dpi}.pdf"
+        extra = [
+            "-dColorImageResolution=%d" % dpi,
+            "-dGrayImageResolution=%d" % dpi,
+            "-dMonoImageResolution=%d" % dpi,
+            "-dDownsampleColorImages=true",
+            "-dDownsampleGrayImages=true",
+            "-dDownsampleMonoImages=true",
+        ]
+        if run_gs(current, out_path, extra) and out_path.stat().st_size < current.stat().st_size:
+            current = out_path
+        if current.stat().st_size <= target_bytes:
+            return current
+
+    return current
 
 
 def _reduce_docx_to_size(docx_path: Path, target_bytes: int) -> Path:
-    """Compress DOCX by recompressing images. Returns path to compressed file."""
+    """Compress DOCX by recompressing and resizing images. Returns path to compressed file."""
     try:
         from PIL import Image
     except ImportError:
         return docx_path
 
-    out_path = docx_path.parent / f"{docx_path.stem}_compressed.docx"
     img_ext = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".tif")
+    # Try progressively more aggressive: quality then max dimension
+    for max_dim, qualities in [(1200, (85, 70, 50, 30)), (800, (25, 20, 15)), (500, (15, 10))]:
+        out_path = docx_path.parent / f"{docx_path.stem}_compressed.docx"
+        with zipfile.ZipFile(docx_path, "r") as z_in:
+            with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z_out:
+                for item in z_in.namelist():
+                    data = z_in.read(item)
+                    if item.lower().endswith(img_ext) and "media/" in item.lower():
+                        try:
+                            img = Image.open(io.BytesIO(data))
+                            if img.mode in ("RGBA", "P"):
+                                img = img.convert("RGB")
+                            w, h = img.size
+                            if max(w, h) > max_dim:
+                                ratio = max_dim / max(w, h)
+                                new_size = (int(w * ratio), int(h * ratio))
+                                img = img.resize(new_size, Image.Resampling.LANCZOS)
+                            buf = io.BytesIO()
+                            best_data = data
+                            for q in qualities:
+                                buf.seek(0)
+                                buf.truncate()
+                                img.save(buf, "JPEG", quality=q, optimize=True)
+                                if buf.tell() < len(best_data):
+                                    best_data = buf.getvalue()
+                            data = best_data
+                        except Exception:
+                            pass
+                    z_out.writestr(item, data)
 
-    with zipfile.ZipFile(docx_path, "r") as z_in:
-        with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z_out:
-            for item in z_in.namelist():
-                data = z_in.read(item)
-                if item.lower().endswith(img_ext) and "media/" in item.lower():
-                    try:
-                        img = Image.open(io.BytesIO(data))
-                        if img.mode in ("RGBA", "P"):
-                            img = img.convert("RGB")
-                        buf = io.BytesIO()
-                        for q in (40, 60, 80):
-                            buf.seek(0)
-                            buf.truncate()
-                            img.save(buf, "JPEG", quality=q, optimize=True)
-                            if buf.tell() < len(data) * 0.8:
-                                data = buf.getvalue()
-                                break
-                    except Exception:
-                        pass
-                z_out.writestr(item, data)
+        if out_path.exists() and out_path.stat().st_size < docx_path.stat().st_size:
+            docx_path = out_path
+        if docx_path.stat().st_size <= target_bytes:
+            return docx_path
 
-    if out_path.exists() and out_path.stat().st_size <= target_bytes:
-        return out_path
-    return out_path if out_path.exists() else docx_path
-
+    return docx_path
 
 def _find_output(outdir: Path, expected_path: Path, suffix: str) -> Path:
     """Return expected_path if it exists, else find first file with given suffix in outdir."""
@@ -505,6 +537,7 @@ async def reduce_word(
         download_name=f"{input_stem}_reduced.docx",
         tmpdir=tmpdir,
     )
+
 
 # ---------- MERGE PDF ----------
 @app.post("/merge-pdf")
