@@ -270,8 +270,8 @@ def _response_with_tmpdir_cleanup(
         background=BackgroundTask(shutil.rmtree, str(tmpdir), ignore_errors=True),
     )
 
-
 @app.get("/health")
+@app.head("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
 
