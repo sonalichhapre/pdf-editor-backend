@@ -1,5 +1,13 @@
 from __future__ import annotations
+import os
+import subprocess
 
+# Auto-install LibreOffice if missing
+if not os.path.exists('/usr/bin/soffice'):
+    subprocess.run(['apt-get', 'update', '-y'], check=False)
+    subprocess.run(['apt-get', 'install', '-y', 'libreoffice'], check=False)
+
+os.environ['LIBREOFFICE_PATH'] = '/usr/bin/soffice'
 import io
 import os
 import shutil
